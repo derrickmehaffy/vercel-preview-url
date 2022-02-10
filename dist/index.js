@@ -111,7 +111,7 @@ module.exports = /******/ (() => {
           const vUsers = core.getInput('vercel_users')
 
           core.info(
-            `Retrieving deployment preview for ${teamId}/${projectId} ...`
+            `Retrieving deployment preview for ${vTeamId}/${vProjectId} ...`
           )
           const { url, state } = await getDeploymentUrl(
             vercelToken,
