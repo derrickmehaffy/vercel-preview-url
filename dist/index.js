@@ -20,12 +20,36 @@ module.exports = /******/ (() => {
       // CONCATENATED MODULE: ./vercel.mjs
 
       const apiUrl = 'https://api.vercel.com'
-      const deploymentsUrl = '/v5/now/deployments'
+      const deploymentsUrl = '/v6/now/deployments'
 
-      async function getDeploymentUrl(token, repo, branch, teamId, projectId) {
+      async function getDeploymentUrl(
+        token,
+        repo,
+        branch,
+        app,
+        from,
+        limit,
+        projectId,
+        since,
+        state,
+        target,
+        teamId,
+        to,
+        until,
+        users
+      ) {
         const query = {
+          app,
+          from,
+          limit,
+          projectId,
+          since,
+          state,
+          target,
           teamId,
-          projectId
+          to,
+          until,
+          users
         }
         const qs = external_querystring_namespaceObject.stringify(query)
 
@@ -74,8 +98,17 @@ module.exports = /******/ (() => {
           const githubProject = process.env.GITHUB_REPOSITORY
           const githubBranch = githubRef.replace('refs/heads/', '')
           const githubRepo = githubProject.split('/')[1]
-          const teamId = core.getInput('vercel_team_id')
-          const projectId = core.getInput('vercel_project_id')
+          const vApp = core.getInput('vercel_app')
+          const vFrom = core.getInput('vercel_from')
+          const vLimit = core.getInput('vercel_limit')
+          const vProjectId = core.getInput('vercel_project_id')
+          const vSince = core.getInput('vercel_since')
+          const vState = core.getInput('vercel_state')
+          const vTarget = core.getInput('vercel_target')
+          const vTeamId = core.getInput('vercel_team_id')
+          const vTo = core.getInput('vercel_to')
+          const vUntil = core.getInput('vercel_until')
+          const vUsers = core.getInput('vercel_users')
 
           core.info(
             `Retrieving deployment preview for ${teamId}/${projectId} ...`
@@ -84,8 +117,17 @@ module.exports = /******/ (() => {
             vercelToken,
             githubRepo,
             githubBranch,
-            teamId,
-            projectId
+            vApp,
+            vFrom,
+            vLimit,
+            vProjectId,
+            vSince,
+            vState,
+            vTarget,
+            vTeamId,
+            vTo,
+            vUntil,
+            vUsers
           )
 
           core.setOutput('preview_url', url)
@@ -4649,7 +4691,7 @@ module.exports = /******/ (() => {
 
         /**
          * Selects a color for a debug namespace
-         * @param {String} namespace The namespace string for the for the debug instance to be colored
+         * @param {String} namespace The namespace string for the debug instance to be colored
          * @return {Number|String} An ANSI color code for the given namespace
          * @api private
          */
@@ -4675,6 +4717,8 @@ module.exports = /******/ (() => {
         function createDebug(namespace) {
           let prevTime
           let enableOverride = null
+          let namespacesCache
+          let enabledCache
 
           function debug(...args) {
             // Disabled?
@@ -4735,10 +4779,17 @@ module.exports = /******/ (() => {
           Object.defineProperty(debug, 'enabled', {
             enumerable: true,
             configurable: false,
-            get: () =>
-              enableOverride === null
-                ? createDebug.enabled(namespace)
-                : enableOverride,
+            get: () => {
+              if (enableOverride !== null) {
+                return enableOverride
+              }
+              if (namespacesCache !== createDebug.namespaces) {
+                namespacesCache = createDebug.namespaces
+                enabledCache = createDebug.enabled(namespace)
+              }
+
+              return enabledCache
+            },
             set: (v) => {
               enableOverride = v
             }
@@ -4771,6 +4822,7 @@ module.exports = /******/ (() => {
          */
         function enable(namespaces) {
           createDebug.save(namespaces)
+          createDebug.namespaces = namespaces
 
           createDebug.names = []
           createDebug.skips = []
@@ -5172,7 +5224,10 @@ module.exports = /******/ (() => {
       })
 
       // Error types with codes
-      var RedirectionError = createErrorType('ERR_FR_REDIRECTION_FAILURE', '')
+      var RedirectionError = createErrorType(
+        'ERR_FR_REDIRECTION_FAILURE',
+        'Redirected request failed'
+      )
       var TooManyRedirectsError = createErrorType(
         'ERR_FR_TOO_MANY_REDIRECTS',
         'Maximum number of redirects exceeded'
@@ -5332,10 +5387,16 @@ module.exports = /******/ (() => {
 
         // Stops a timeout from triggering
         function clearTimer() {
+          // Clear the timeout
           if (self._timeout) {
             clearTimeout(self._timeout)
             self._timeout = null
           }
+
+          // Clean up all attached listeners
+          self.removeListener('abort', clearTimer)
+          self.removeListener('error', clearTimer)
+          self.removeListener('response', clearTimer)
           if (callback) {
             self.removeListener('timeout', callback)
           }
@@ -5358,8 +5419,9 @@ module.exports = /******/ (() => {
 
         // Clean up on events
         this.on('socket', destroyOnTimeout)
-        this.once('response', clearTimer)
-        this.once('error', clearTimer)
+        this.on('abort', clearTimer)
+        this.on('error', clearTimer)
+        this.on('response', clearTimer)
 
         return this
       }
@@ -5534,20 +5596,42 @@ module.exports = /******/ (() => {
           }
 
           // Drop the Host header, as the redirect might lead to a different host
-          var previousHostName =
-            removeMatchingHeaders(/^host$/i, this._options.headers) ||
-            url.parse(this._currentUrl).hostname
+          var currentHostHeader = removeMatchingHeaders(
+            /^host$/i,
+            this._options.headers
+          )
+
+          // If the redirect is relative, carry over the host of the last request
+          var currentUrlParts = url.parse(this._currentUrl)
+          var currentHost = currentHostHeader || currentUrlParts.host
+          var currentUrl = /^\w+:/.test(location)
+            ? this._currentUrl
+            : url.format(Object.assign(currentUrlParts, { host: currentHost }))
+
+          // Determine the URL of the redirection
+          var redirectUrl
+          try {
+            redirectUrl = url.resolve(currentUrl, location)
+          } catch (cause) {
+            this.emit('error', new RedirectionError(cause))
+            return
+          }
 
           // Create the redirected request
-          var redirectUrl = url.resolve(this._currentUrl, location)
           debug('redirecting to', redirectUrl)
           this._isRedirect = true
           var redirectUrlParts = url.parse(redirectUrl)
           Object.assign(this._options, redirectUrlParts)
 
-          // Drop the Authorization header if redirecting to another host
-          if (redirectUrlParts.hostname !== previousHostName) {
-            removeMatchingHeaders(/^authorization$/i, this._options.headers)
+          // Drop confidential headers when redirecting to another scheme:domain
+          if (
+            redirectUrlParts.protocol !== currentUrlParts.protocol ||
+            !isSameOrSubdomain(redirectUrlParts.host, currentHost)
+          ) {
+            removeMatchingHeaders(
+              /^(?:authorization|cookie)$/i,
+              this._options.headers
+            )
           }
 
           // Evaluate the beforeRedirect callback
@@ -5570,11 +5654,7 @@ module.exports = /******/ (() => {
           try {
             this._performRequest()
           } catch (cause) {
-            var error = new RedirectionError(
-              'Redirected request failed: ' + cause.message
-            )
-            error.cause = cause
-            this.emit('error', error)
+            this.emit('error', new RedirectionError(cause))
           }
         } else {
           // The response is not a redirect; return it as-is
@@ -5705,13 +5785,20 @@ module.exports = /******/ (() => {
             delete headers[header]
           }
         }
-        return lastValue
+        return lastValue === null || typeof lastValue === 'undefined'
+          ? undefined
+          : String(lastValue).trim()
       }
 
       function createErrorType(code, defaultMessage) {
-        function CustomError(message) {
+        function CustomError(cause) {
           Error.captureStackTrace(this, this.constructor)
-          this.message = message || defaultMessage
+          if (!cause) {
+            this.message = defaultMessage
+          } else {
+            this.message = defaultMessage + ': ' + cause.message
+            this.cause = cause
+          }
         }
         CustomError.prototype = new Error()
         CustomError.prototype.constructor = CustomError
@@ -5728,6 +5815,14 @@ module.exports = /******/ (() => {
         request.abort()
       }
 
+      function isSameOrSubdomain(subdomain, domain) {
+        if (subdomain === domain) {
+          return true
+        }
+        const dot = subdomain.length - domain.length - 1
+        return dot > 0 && subdomain[dot] === '.' && subdomain.endsWith(domain)
+      }
+
       // Exports
       module.exports = wrap({ http: http, https: https })
       module.exports.wrap = wrap
@@ -5738,16 +5833,18 @@ module.exports = /******/ (() => {
     /***/ 1621: /***/ (module) => {
       'use strict'
 
-      module.exports = (flag, argv) => {
-        argv = argv || process.argv
+      module.exports = (flag, argv = process.argv) => {
         const prefix = flag.startsWith('-')
           ? ''
           : flag.length === 1
           ? '-'
           : '--'
-        const pos = argv.indexOf(prefix + flag)
-        const terminatorPos = argv.indexOf('--')
-        return pos !== -1 && (terminatorPos === -1 ? true : pos < terminatorPos)
+        const position = argv.indexOf(prefix + flag)
+        const terminatorPosition = argv.indexOf('--')
+        return (
+          position !== -1 &&
+          (terminatorPosition === -1 || position < terminatorPosition)
+        )
       }
 
       /***/
@@ -5929,28 +6026,39 @@ module.exports = /******/ (() => {
       'use strict'
 
       const os = __nccwpck_require__(2087)
+      const tty = __nccwpck_require__(3867)
       const hasFlag = __nccwpck_require__(1621)
 
-      const env = process.env
+      const { env } = process
 
       let forceColor
       if (
         hasFlag('no-color') ||
         hasFlag('no-colors') ||
-        hasFlag('color=false')
+        hasFlag('color=false') ||
+        hasFlag('color=never')
       ) {
-        forceColor = false
+        forceColor = 0
       } else if (
         hasFlag('color') ||
         hasFlag('colors') ||
         hasFlag('color=true') ||
         hasFlag('color=always')
       ) {
-        forceColor = true
+        forceColor = 1
       }
+
       if ('FORCE_COLOR' in env) {
-        forceColor =
-          env.FORCE_COLOR.length === 0 || parseInt(env.FORCE_COLOR, 10) !== 0
+        if (env.FORCE_COLOR === 'true') {
+          forceColor = 1
+        } else if (env.FORCE_COLOR === 'false') {
+          forceColor = 0
+        } else {
+          forceColor =
+            env.FORCE_COLOR.length === 0
+              ? 1
+              : Math.min(parseInt(env.FORCE_COLOR, 10), 3)
+        }
       }
 
       function translateLevel(level) {
@@ -5966,8 +6074,8 @@ module.exports = /******/ (() => {
         }
       }
 
-      function supportsColor(stream) {
-        if (forceColor === false) {
+      function supportsColor(haveStream, streamIsTTY) {
+        if (forceColor === 0) {
           return 0
         }
 
@@ -5983,25 +6091,21 @@ module.exports = /******/ (() => {
           return 2
         }
 
-        if (stream && !stream.isTTY && forceColor !== true) {
+        if (haveStream && !streamIsTTY && forceColor === undefined) {
           return 0
         }
 
-        const min = forceColor ? 1 : 0
+        const min = forceColor || 0
+
+        if (env.TERM === 'dumb') {
+          return min
+        }
 
         if (process.platform === 'win32') {
-          // Node.js 7.5.0 is the first version of Node.js to include a patch to
-          // libuv that enables 256 color output on Windows. Anything earlier and it
-          // won't work. However, here we target Node.js 8 at minimum as it is an LTS
-          // release, and Node.js 7 is not. Windows 10 build 10586 is the first Windows
-          // release that supports 256 colors. Windows 10 build 14931 is the first release
-          // that supports 16m/TrueColor.
+          // Windows 10 build 10586 is the first Windows release that supports 256 colors.
+          // Windows 10 build 14931 is the first release that supports 16m/TrueColor.
           const osRelease = os.release().split('.')
-          if (
-            Number(process.versions.node.split('.')[0]) >= 8 &&
-            Number(osRelease[0]) >= 10 &&
-            Number(osRelease[2]) >= 10586
-          ) {
+          if (Number(osRelease[0]) >= 10 && Number(osRelease[2]) >= 10586) {
             return Number(osRelease[2]) >= 14931 ? 3 : 2
           }
 
@@ -6010,9 +6114,14 @@ module.exports = /******/ (() => {
 
         if ('CI' in env) {
           if (
-            ['TRAVIS', 'CIRCLECI', 'APPVEYOR', 'GITLAB_CI'].some(
-              (sign) => sign in env
-            ) ||
+            [
+              'TRAVIS',
+              'CIRCLECI',
+              'APPVEYOR',
+              'GITLAB_CI',
+              'GITHUB_ACTIONS',
+              'BUILDKITE'
+            ].some((sign) => sign in env) ||
             env.CI_NAME === 'codeship'
           ) {
             return 1
@@ -6062,22 +6171,18 @@ module.exports = /******/ (() => {
           return 1
         }
 
-        if (env.TERM === 'dumb') {
-          return min
-        }
-
         return min
       }
 
       function getSupportLevel(stream) {
-        const level = supportsColor(stream)
+        const level = supportsColor(stream, stream && stream.isTTY)
         return translateLevel(level)
       }
 
       module.exports = {
         supportsColor: getSupportLevel,
-        stdout: getSupportLevel(process.stdout),
-        stderr: getSupportLevel(process.stderr)
+        stdout: translateLevel(supportsColor(true, tty.isatty(1))),
+        stderr: translateLevel(supportsColor(true, tty.isatty(2)))
       }
 
       /***/
